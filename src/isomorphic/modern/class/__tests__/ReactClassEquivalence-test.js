@@ -14,31 +14,34 @@
 var spawnSync = require('child_process').spawnSync;
 var path = require('path');
 
-describe('ReactClassEquivalence', function() {
-  it('tests the same thing for es6 classes and CoffeeScript', function() {
+describe('ReactClassEquivalence', () => {
+  it('tests the same thing for es6 classes and CoffeeScript', () => {
     var result1 = runJest('ReactCoffeeScriptClass-test.coffee');
     var result2 = runJest('ReactES6Class-test.js');
     compareResults(result1, result2);
   });
 
-  it('tests the same thing for es6 classes and TypeScript', function() {
+  it('tests the same thing for es6 classes and TypeScript', () => {
     var result1 = runJest('ReactTypeScriptClass-test.ts');
     var result2 = runJest('ReactES6Class-test.js');
     compareResults(result1, result2);
   });
-
 });
 
 function runJest(testFile) {
   var cwd = process.cwd();
-  var jestBin = path.resolve('node_modules', '.bin', 'jest');
-  var setupFile = path.resolve(__dirname, 'setupSpecEquivalenceReporter.js');
-  var result = spawnSync('node', [
+  var extension = process.platform === 'win32' ? '.cmd' : '';
+  var jestBin = path.resolve('node_modules', '.bin', 'jest' + extension);
+  var setupFile = path.resolve(
+    'scripts',
+    'jest',
+    'setupSpecEquivalenceReporter.js',
+  );
+  var result = spawnSync(
     jestBin,
-    testFile,
-    '--setupTestFrameworkScriptFile',
-    setupFile,
-  ], {cwd});
+    [testFile, '--setupTestFrameworkScriptFile', setupFile],
+    {cwd},
+  );
 
   if (result.error) {
     throw result.error;
@@ -47,12 +50,12 @@ function runJest(testFile) {
   if (result.status !== 0) {
     throw new Error(
       'jest process exited with: ' +
-      result.status +
-      '\n' +
-      'stdout: ' +
-      result.stdout.toString() +
-      'stderr: ' +
-      result.stderr.toString()
+        result.status +
+        '\n' +
+        'stdout: ' +
+        result.stdout.toString() +
+        'stderr: ' +
+        result.stderr.toString(),
     );
   }
 
@@ -60,7 +63,7 @@ function runJest(testFile) {
 }
 
 function compareResults(a, b) {
-  var regexp = /^EQUIVALENCE.*$/gm;
+  var regexp = /EQUIVALENCE.*$/gm;
   var aSpecs = (a.match(regexp) || []).sort().join('\n');
   var bSpecs = (b.match(regexp) || []).sort().join('\n');
 

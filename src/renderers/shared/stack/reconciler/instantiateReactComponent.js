@@ -15,26 +15,21 @@ var ReactCompositeComponent = require('ReactCompositeComponent');
 var ReactEmptyComponent = require('ReactEmptyComponent');
 var ReactHostComponent = require('ReactHostComponent');
 
-var invariant = require('invariant');
-var warning = require('warning');
+var invariant = require('fbjs/lib/invariant');
+var warning = require('fbjs/lib/warning');
+
+var nextDebugID = 1;
 
 // To avoid a cyclic dependency, we create the final class in this module
 var ReactCompositeComponentWrapper = function(element) {
   this.construct(element);
 };
-Object.assign(
-  ReactCompositeComponentWrapper.prototype,
-  ReactCompositeComponent.Mixin,
-  {
-    _instantiateReactComponent: instantiateReactComponent,
-  }
-);
 
 function getDeclarationErrorAddendum(owner) {
   if (owner) {
     var name = owner.getName();
     if (name) {
-      return ' Check the render method of `' + name + '`.';
+      return '\n\nCheck the render method of `' + name + '`.';
     }
   }
   return '';
@@ -56,8 +51,6 @@ function isInternalComponentType(type) {
   );
 }
 
-var nextDebugID = 1;
-
 /**
  * Given a ReactNode, create an instance that will actually be mounted.
  *
@@ -73,14 +66,30 @@ function instantiateReactComponent(node, shouldHaveDebugID) {
     instance = ReactEmptyComponent.create(instantiateReactComponent);
   } else if (typeof node === 'object') {
     var element = node;
-    invariant(
-      element && (typeof element.type === 'function' ||
-                  typeof element.type === 'string'),
-      'Element type is invalid: expected a string (for built-in components) ' +
-      'or a class/function (for composite components) but got: %s.%s',
-      element.type == null ? element.type : typeof element.type,
-      getDeclarationErrorAddendum(element._owner)
-    );
+    var type = element.type;
+    if (typeof type !== 'function' && typeof type !== 'string') {
+      var info = '';
+      if (__DEV__) {
+        if (
+          type === undefined ||
+          (typeof type === 'object' &&
+            type !== null &&
+            Object.keys(type).length === 0)
+        ) {
+          info +=
+            ' You likely forgot to export your component from the file ' +
+            "it's defined in.";
+        }
+      }
+      info += getDeclarationErrorAddendum(element._owner);
+      invariant(
+        false,
+        'Element type is invalid: expected a string (for built-in components) ' +
+          'or a class/function (for composite components) but got: %s.%s',
+        type == null ? type : typeof type,
+        info,
+      );
+    }
 
     // Special case string values
     if (typeof element.type === 'string') {
@@ -101,20 +110,16 @@ function instantiateReactComponent(node, shouldHaveDebugID) {
   } else if (typeof node === 'string' || typeof node === 'number') {
     instance = ReactHostComponent.createInstanceForText(node);
   } else {
-    invariant(
-      false,
-      'Encountered invalid React node of type %s',
-      typeof node
-    );
+    invariant(false, 'Encountered invalid React node of type %s', typeof node);
   }
 
   if (__DEV__) {
     warning(
       typeof instance.mountComponent === 'function' &&
-      typeof instance.receiveComponent === 'function' &&
-      typeof instance.getHostNode === 'function' &&
-      typeof instance.unmountComponent === 'function',
-      'Only React Components can be mounted.'
+        typeof instance.receiveComponent === 'function' &&
+        typeof instance.getHostNode === 'function' &&
+        typeof instance.unmountComponent === 'function',
+      'Only React Components can be mounted.',
     );
   }
 
@@ -138,5 +143,13 @@ function instantiateReactComponent(node, shouldHaveDebugID) {
 
   return instance;
 }
+
+Object.assign(
+  ReactCompositeComponentWrapper.prototype,
+  ReactCompositeComponent,
+  {
+    _instantiateReactComponent: instantiateReactComponent,
+  },
+);
 
 module.exports = instantiateReactComponent;

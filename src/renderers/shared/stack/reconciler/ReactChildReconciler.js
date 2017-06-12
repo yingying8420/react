@@ -11,13 +11,13 @@
 
 'use strict';
 
+var KeyEscapeUtils = require('KeyEscapeUtils');
 var ReactReconciler = require('ReactReconciler');
 
 var instantiateReactComponent = require('instantiateReactComponent');
-var KeyEscapeUtils = require('KeyEscapeUtils');
 var shouldUpdateReactComponent = require('shouldUpdateReactComponent');
-var traverseAllChildren = require('traverseAllChildren');
-var warning = require('warning');
+var traverseStackChildren = require('traverseStackChildren');
+var warning = require('fbjs/lib/warning');
 
 var ReactComponentTreeHook;
 
@@ -31,24 +31,26 @@ if (
   // https://github.com/facebook/react/issues/7240
   // Remove the inline requires when we don't need them anymore:
   // https://github.com/facebook/react/pull/7178
-  ReactComponentTreeHook = require('ReactComponentTreeHook');
+  ReactComponentTreeHook = require('ReactGlobalSharedState')
+    .ReactComponentTreeHook;
 }
 
 function instantiateChild(childInstances, child, name, selfDebugID) {
   // We found a component instance.
-  var keyUnique = (childInstances[name] === undefined);
+  var keyUnique = childInstances[name] === undefined;
   if (__DEV__) {
     if (!ReactComponentTreeHook) {
-      ReactComponentTreeHook = require('ReactComponentTreeHook');
+      ReactComponentTreeHook = require('ReactGlobalSharedState')
+        .ReactComponentTreeHook;
     }
     if (!keyUnique) {
       warning(
         false,
         'flattenChildren(...): Encountered two children with the same key, ' +
-        '`%s`. Child keys must be unique; when two children share a key, only ' +
-        'the first child will be used.%s',
-        KeyEscapeUtils.unescape(name),
-        ReactComponentTreeHook.getStackAddendumByID(selfDebugID)
+          '`%s`. Child keys must be unique; when two children share a key, only ' +
+          'the first child will be used.%s',
+        KeyEscapeUtils.unescapeInDev(name),
+        ReactComponentTreeHook.getStackAddendumByID(selfDebugID),
       );
     }
   }
@@ -75,7 +77,7 @@ var ReactChildReconciler = {
     nestedChildNodes,
     transaction,
     context,
-    selfDebugID // 0 in production and for roots
+    selfDebugID, // 0 in production and for roots
   ) {
     if (nestedChildNodes == null) {
       return null;
@@ -83,18 +85,14 @@ var ReactChildReconciler = {
     var childInstances = {};
 
     if (__DEV__) {
-      traverseAllChildren(
+      traverseStackChildren(
         nestedChildNodes,
-        (childInsts, child, name) => instantiateChild(
-          childInsts,
-          child,
-          name,
-          selfDebugID
-        ),
-        childInstances
+        (childInsts, child, name) =>
+          instantiateChild(childInsts, child, name, selfDebugID),
+        childInstances,
       );
     } else {
-      traverseAllChildren(nestedChildNodes, instantiateChild, childInstances);
+      traverseStackChildren(nestedChildNodes, instantiateChild, childInstances);
     }
     return childInstances;
   },
@@ -118,7 +116,7 @@ var ReactChildReconciler = {
     hostParent,
     hostContainerInfo,
     context,
-    selfDebugID // 0 in production and for roots
+    selfDebugID, // 0 in production and for roots
   ) {
     // We currently don't have a way to track moves here but if we use iterators
     // instead of for..in we can zip the iterators and check if an item has
@@ -137,17 +135,18 @@ var ReactChildReconciler = {
       prevChild = prevChildren && prevChildren[name];
       var prevElement = prevChild && prevChild._currentElement;
       var nextElement = nextChildren[name];
-      if (prevChild != null &&
-          shouldUpdateReactComponent(prevElement, nextElement)) {
+      if (
+        prevChild != null &&
+        shouldUpdateReactComponent(prevElement, nextElement)
+      ) {
         ReactReconciler.receiveComponent(
-          prevChild, nextElement, transaction, context
+          prevChild,
+          nextElement,
+          transaction,
+          context,
         );
         nextChildren[name] = prevChild;
       } else {
-        if (prevChild) {
-          removedNodes[name] = ReactReconciler.getHostNode(prevChild);
-          ReactReconciler.unmountComponent(prevChild, false);
-        }
         // The child must be instantiated before it's mounted.
         var nextChildInstance = instantiateReactComponent(nextElement, true);
         nextChildren[name] = nextChildInstance;
@@ -159,18 +158,32 @@ var ReactChildReconciler = {
           hostParent,
           hostContainerInfo,
           context,
-          selfDebugID
+          selfDebugID,
         );
         mountImages.push(nextChildMountImage);
+        if (prevChild) {
+          removedNodes[name] = ReactReconciler.getHostNode(prevChild);
+          ReactReconciler.unmountComponent(
+            prevChild,
+            false /* safely */,
+            false /* skipLifecycle */,
+          );
+        }
       }
     }
     // Unmount children that are no longer present.
     for (name in prevChildren) {
-      if (prevChildren.hasOwnProperty(name) &&
-          !(nextChildren && nextChildren.hasOwnProperty(name))) {
+      if (
+        prevChildren.hasOwnProperty(name) &&
+        !(nextChildren && nextChildren.hasOwnProperty(name))
+      ) {
         prevChild = prevChildren[name];
         removedNodes[name] = ReactReconciler.getHostNode(prevChild);
-        ReactReconciler.unmountComponent(prevChild, false);
+        ReactReconciler.unmountComponent(
+          prevChild,
+          false /* safely */,
+          false /* skipLifecycle */,
+        );
       }
     }
   },
@@ -182,15 +195,14 @@ var ReactChildReconciler = {
    * @param {?object} renderedChildren Previously initialized set of children.
    * @internal
    */
-  unmountChildren: function(renderedChildren, safely) {
+  unmountChildren: function(renderedChildren, safely, skipLifecycle) {
     for (var name in renderedChildren) {
       if (renderedChildren.hasOwnProperty(name)) {
         var renderedChild = renderedChildren[name];
-        ReactReconciler.unmountComponent(renderedChild, safely);
+        ReactReconciler.unmountComponent(renderedChild, safely, skipLifecycle);
       }
     }
   },
-
 };
 
 module.exports = ReactChildReconciler;

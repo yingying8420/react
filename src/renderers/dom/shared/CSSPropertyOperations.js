@@ -12,21 +12,24 @@
 'use strict';
 
 var CSSProperty = require('CSSProperty');
-var ExecutionEnvironment = require('ExecutionEnvironment');
-var ReactInstrumentation = require('ReactInstrumentation');
+var ExecutionEnvironment = require('fbjs/lib/ExecutionEnvironment');
 
-var camelizeStyleName = require('camelizeStyleName');
+var camelizeStyleName = require('fbjs/lib/camelizeStyleName');
 var dangerousStyleValue = require('dangerousStyleValue');
-var hyphenateStyleName = require('hyphenateStyleName');
-var memoizeStringOnly = require('memoizeStringOnly');
-var warning = require('warning');
+var getComponentName = require('getComponentName');
+var hyphenateStyleName = require('fbjs/lib/hyphenateStyleName');
+var memoizeStringOnly = require('fbjs/lib/memoizeStringOnly');
+var warning = require('fbjs/lib/warning');
+
+if (__DEV__) {
+  var {getCurrentFiberOwnerName} = require('ReactDebugCurrentFiber');
+}
 
 var processStyleName = memoizeStringOnly(function(styleName) {
   return hyphenateStyleName(styleName);
 });
 
 var hasShorthandPropertyBug = false;
-var styleFloatAccessor = 'cssFloat';
 if (ExecutionEnvironment.canUseDOM) {
   var tempStyle = document.createElement('div').style;
   try {
@@ -34,10 +37,6 @@ if (ExecutionEnvironment.canUseDOM) {
     tempStyle.font = '';
   } catch (e) {
     hasShorthandPropertyBug = true;
-  }
-  // IE8 only supports accessing cssFloat (standard) as styleFloat
-  if (document.documentElement.style.cssFloat === undefined) {
-    styleFloatAccessor = 'styleFloat';
   }
 }
 
@@ -51,6 +50,7 @@ if (__DEV__) {
   var warnedStyleNames = {};
   var warnedStyleValues = {};
   var warnedForNaNValue = false;
+  var warnedForInfinityValue = false;
 
   var warnHyphenatedStyleName = function(name, owner) {
     if (warnedStyleNames.hasOwnProperty(name) && warnedStyleNames[name]) {
@@ -63,7 +63,7 @@ if (__DEV__) {
       'Unsupported style property %s. Did you mean %s?%s',
       name,
       camelizeStyleName(name),
-      checkRenderMessage(owner)
+      checkRenderMessage(owner),
     );
   };
 
@@ -78,7 +78,7 @@ if (__DEV__) {
       'Unsupported vendor-prefixed style property %s. Did you mean %s?%s',
       name,
       name.charAt(0).toUpperCase() + name.slice(1),
-      checkRenderMessage(owner)
+      checkRenderMessage(owner),
     );
   };
 
@@ -90,11 +90,11 @@ if (__DEV__) {
     warnedStyleValues[value] = true;
     warning(
       false,
-      'Style property values shouldn\'t contain a semicolon.%s ' +
-      'Try "%s: %s" instead.',
+      "Style property values shouldn't contain a semicolon.%s " +
+        'Try "%s: %s" instead.',
       checkRenderMessage(owner),
       name,
-      value.replace(badStyleValueWithSemicolonPattern, '')
+      value.replace(badStyleValueWithSemicolonPattern, ''),
     );
   };
 
@@ -108,16 +108,37 @@ if (__DEV__) {
       false,
       '`NaN` is an invalid value for the `%s` css style property.%s',
       name,
-      checkRenderMessage(owner)
+      checkRenderMessage(owner),
+    );
+  };
+
+  var warnStyleValueIsInfinity = function(name, value, owner) {
+    if (warnedForInfinityValue) {
+      return;
+    }
+
+    warnedForInfinityValue = true;
+    warning(
+      false,
+      '`Infinity` is an invalid value for the `%s` css style property.%s',
+      name,
+      checkRenderMessage(owner),
     );
   };
 
   var checkRenderMessage = function(owner) {
-    if (owner) {
-      var name = owner.getName();
-      if (name) {
-        return ' Check the render method of `' + name + '`.';
-      }
+    var ownerName;
+    if (owner != null) {
+      // Stack passes the owner manually all the way to CSSPropertyOperations.
+      ownerName = getComponentName(owner);
+    } else {
+      // Fiber doesn't pass it but uses ReactDebugCurrentFiber to track it.
+      // It is only enabled in development and tracks host components too.
+      ownerName = getCurrentFiberOwnerName();
+      // TODO: also report the stack.
+    }
+    if (ownerName) {
+      return '\n\nCheck the render method of `' + ownerName + '`.';
     }
     return '';
   };
@@ -128,6 +149,10 @@ if (__DEV__) {
    * @param {ReactDOMComponent} component
    */
   var warnValidStyle = function(name, value, component) {
+    // Don't warn for CSS variables
+    if (name.indexOf('--') === 0) {
+      return;
+    }
     var owner;
     if (component) {
       owner = component._currentElement._owner;
@@ -140,8 +165,12 @@ if (__DEV__) {
       warnStyleValueWithSemicolon(name, value, owner);
     }
 
-    if (typeof value === 'number' && isNaN(value)) {
-      warnStyleValueIsNaN(name, value, owner);
+    if (typeof value === 'number') {
+      if (isNaN(value)) {
+        warnStyleValueIsNaN(name, value, owner);
+      } else if (!isFinite(value)) {
+        warnStyleValueIsInfinity(name, value, owner);
+      }
     }
   };
 }
@@ -150,7 +179,6 @@ if (__DEV__) {
  * Operations for dealing with CSS properties.
  */
 var CSSPropertyOperations = {
-
   /**
    * Serializes a mapping of style properties for use as inline styles:
    *
@@ -166,6 +194,7 @@ var CSSPropertyOperations = {
    */
   createMarkupForStyles: function(styles, component) {
     var serialized = '';
+    var delimiter = '';
     for (var styleName in styles) {
       if (!styles.hasOwnProperty(styleName)) {
         continue;
@@ -175,9 +204,10 @@ var CSSPropertyOperations = {
         warnValidStyle(styleName, styleValue, component);
       }
       if (styleValue != null) {
-        serialized += processStyleName(styleName) + ':';
-        serialized +=
-          dangerousStyleValue(styleName, styleValue, component) + ';';
+        serialized += delimiter + processStyleName(styleName) + ':';
+        serialized += dangerousStyleValue(styleName, styleValue, component);
+
+        delimiter = ';';
       }
     }
     return serialized || null;
@@ -192,14 +222,6 @@ var CSSPropertyOperations = {
    * @param {ReactDOMComponent} component
    */
   setValueForStyles: function(node, styles, component) {
-    if (__DEV__) {
-      ReactInstrumentation.debugTool.onHostOperation(
-        component._debugID,
-        'update styles',
-        styles
-      );
-    }
-
     var style = node.style;
     for (var styleName in styles) {
       if (!styles.hasOwnProperty(styleName)) {
@@ -211,12 +233,14 @@ var CSSPropertyOperations = {
       var styleValue = dangerousStyleValue(
         styleName,
         styles[styleName],
-        component
+        component,
       );
-      if (styleName === 'float' || styleName === 'cssFloat') {
-        styleName = styleFloatAccessor;
+      if (styleName === 'float') {
+        styleName = 'cssFloat';
       }
-      if (styleValue) {
+      if (styleName.indexOf('--') === 0) {
+        style.setProperty(styleName, styleValue);
+      } else if (styleValue) {
         style[styleName] = styleValue;
       } else {
         var expansion =
@@ -234,7 +258,6 @@ var CSSPropertyOperations = {
       }
     }
   },
-
 };
 
 module.exports = CSSPropertyOperations;
